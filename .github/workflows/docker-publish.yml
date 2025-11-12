@@ -1,0 +1,122 @@
+name: Docker Build and Publish
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  DOCKER_IMAGE: ${{ secrets.DOCKER_USERNAME }}/sqlserver-dc-audit-ddl-worker
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Get version
+        id: version
+        run: |
+          if git describe --tags --exact-match 2>/dev/null; then
+            VERSION=$(git describe --tags --exact-match)
+          else
+            VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "v0.1.0")
+            COMMIT_COUNT=$(git rev-list --count HEAD)
+            SHORT_SHA=$(git rev-parse --short HEAD)
+            VERSION="${VERSION}-${COMMIT_COUNT}-${SHORT_SHA}"
+          fi
+          
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "major=$(echo ${VERSION} | cut -d. -f1 | sed 's/v//')" >> $GITHUB_OUTPUT
+          echo "minor=$(echo ${VERSION} | cut -d. -f1-2 | sed 's/v//')" >> $GITHUB_OUTPUT
+          echo "patch=$(echo ${VERSION} | cut -d. -f1-3 | sed 's/v//' | cut -d- -f1)" >> $GITHUB_OUTPUT
+          
+          echo "Version: ${VERSION}"
+
+      - name: Generate build metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=raw,value=${{ steps.version.outputs.major }}
+            type=raw,value=${{ steps.version.outputs.minor }}
+            type=raw,value=${{ steps.version.outputs.patch }}
+            type=sha,prefix={{branch}}-
+          labels: |
+            org.opencontainers.image.title=SQL Server DDL Audit Worker
+            org.opencontainers.image.description=Worker para auditoria DDL do SQL Server com notificações Discord
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache,mode=max
+          platforms: linux/amd64,linux/arm64
+
+      - name: Bump version and create tag
+        id: bump_version
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "Latest tag: ${LATEST_TAG}"
+          
+          IFS='.' read -r -a VERSION_PARTS <<< "${LATEST_TAG//v/}"
+          MAJOR="${VERSION_PARTS[0]}"
+          MINOR="${VERSION_PARTS[1]}"
+          PATCH="${VERSION_PARTS[2]}"
+          
+          PATCH=$((PATCH + 1))
+          NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+          
+          echo "new_tag=${NEW_TAG}" >> $GITHUB_OUTPUT
+          echo "New tag: ${NEW_TAG}"
+          
+          git tag -a "${NEW_TAG}" -m "Release ${NEW_TAG}"
+          git push origin "${NEW_TAG}"
+
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.bump_version.outputs.new_tag }}
+          release_name: Release ${{ steps.bump_version.outputs.new_tag }}
+          body: |
+            ## Release ${{ steps.bump_version.outputs.new_tag }}
+            
+            Docker Image: `${{ env.DOCKER_IMAGE }}:${{ steps.bump_version.outputs.new_tag }}`
+            
+            ```bash
+            docker pull ${{ env.DOCKER_IMAGE }}:${{ steps.bump_version.outputs.new_tag }}
+            ```
+          draft: false
+          prerelease: false
+
