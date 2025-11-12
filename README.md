@@ -20,38 +20,23 @@ Sistema de auditoria DDL para SQL Server com polling worker Node.js que monitora
 
 ## 🛠️ Instalação
 
-### Opção 1: Desenvolvimento Local (Recomendado)
+### Docker Hub
+
+```bash
+# Pull da imagem
+docker pull pedrohenrique/sqlserver-dc-audit-ddl-worker:latest
+
+# Executar com arquivo .env
+docker run --env-file .env pedrohenrique/sqlserver-dc-audit-ddl-worker:latest
+```
+
+### Build Local
 
 ```bash
 # Clonar o repositório
 git clone <repository-url>
 cd sqlserver-dc-audit-ddl-worker
 
-# Instalar dependências
-npm install
-
-# Iniciar SQL Server com Docker (banco único com ambos os databases)
-docker-compose up -d
-
-# Aguardar o container ficar saudável
-docker-compose ps
-
-# Compilar TypeScript
-npm run build
-```
-
-**O Docker inicializa automaticamente os bancos:**
-- ✅ Banco `SchemaAudit` (auditoria central)
-- ✅ Banco `TestDB` (monitorado para testes)
-
-**O sistema cria automaticamente quando executado:**
-- ✅ Tabelas necessárias em ambos os bancos
-- ✅ DDL Triggers nos bancos monitorados
-- ✅ Testa funcionamento dos triggers
-
-### Opção 2: Instalação Manual
-
-```bash
 # Instalar dependências
 npm install
 
@@ -112,21 +97,13 @@ MONITORED_DATABASES=[
 ]
 ```
 
-### 2. Configuração Automática dos Bancos SQL Server
+### 2. Configuração Automática
 
-O sistema configura automaticamente tudo o que é necessário:
-
-#### Banco Central de Auditoria
-- ✅ Cria automaticamente a tabela `schema_audit_log`
-- ✅ Configura índices para otimização
-
-#### Bancos Monitorados
-- ✅ Cria automaticamente a tabela `local_ddl_audit`
-- ✅ Cria e configura DDL Triggers
-- ✅ Testa funcionamento dos triggers
-- ✅ Valida permissões de acesso
-
-**Apenas configure as variáveis de ambiente - o sistema cuida do resto!**
+O sistema configura automaticamente:
+- ✅ Tabelas de auditoria
+- ✅ DDL Triggers nos bancos monitorados
+- ✅ Índices para otimização
+- ✅ Validação de permissões
 
 ## 🚀 Execução
 
@@ -274,40 +251,34 @@ O sistema utiliza Winston para logging estruturado com diferentes níveis:
 - Validação de certificados
 - Logs não incluem senhas
 
-## 🐳 Docker para Desenvolvimento
+## 🐳 Docker
 
-O projeto inclui configuração Docker completa para desenvolvimento:
-
-### Container Disponível
-
-- **sqlserver**: SQL Server único com dois bancos:
-  - `SchemaAudit` (porta 1433) - Banco central de auditoria
-  - `TestDB` (porta 1433) - Banco monitorado com DDL trigger
-
-### Comandos Úteis
+### Imagem Docker Hub
 
 ```bash
-# Iniciar container
-docker-compose up -d
+# Pull da imagem
+docker pull pedrohenrique/sqlserver-dc-audit-ddl-worker:latest
 
-# Ver status do container
-docker-compose ps
+# Executar
+docker run -d \
+  --name ddl-audit-worker \
+  --env-file .env \
+  --restart unless-stopped \
+  pedrohenrique/sqlserver-dc-audit-ddl-worker:latest
 
 # Ver logs
-docker-compose logs -f
+docker logs -f ddl-audit-worker
 
-# Conectar ao SQL Server
-docker exec -it sqlserver /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P 'YourStrong!Passw0rd'
-
-# Verificar bancos criados
-docker exec -it sqlserver /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P 'YourStrong!Passw0rd' -Q "SELECT name FROM sys.databases"
-
-# Parar container
-docker-compose down
-
-# Limpar volumes
-docker-compose down -v
+# Parar
+docker stop ddl-audit-worker
 ```
+
+### Tags Disponíveis
+
+- `latest` - Última versão estável
+- `v1.0.0` - Versão específica
+- `v1` - Major version
+- `v1.0` - Minor version
 
 ## 📝 Desenvolvimento
 
@@ -322,10 +293,6 @@ src/
 │   ├── polling-worker.ts # Worker de polling
 │   └── discord.ts    # Notificações Discord
 └── index.ts         # Ponto de entrada
-
-docker-compose.yml   # Configuração Docker
-init-db/            # Scripts de inicialização SQL
-env.development.example # Exemplo de configuração
 ```
 
 ### Scripts NPM
@@ -344,4 +311,7 @@ env.development.example # Exemplo de configuração
 4. Push para a branch (`git push origin feature/AmazingFeature`)
 5. Abra um Pull Request
 
+## 📦 Docker Hub
+
+Imagem oficial: [pedrohenrique/sqlserver-dc-audit-ddl-worker](https://hub.docker.com/r/pedrohenrique/sqlserver-dc-audit-ddl-worker)
 
