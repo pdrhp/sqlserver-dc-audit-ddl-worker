@@ -1,0 +1,43 @@
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: sqlserver-audit-dev
+    environment:
+      - ACCEPT_EULA=Y
+      - MSSQL_SA_PASSWORD=YourStrong!Passw0rd
+      - MSSQL_PID=Developer
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+      - ./scripts/init-databases.sql:/scripts/init-databases.sql:ro,z
+    healthcheck:
+      test: /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "YourStrong!Passw0rd" -C -Q "SELECT 1" || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  # Serviço auxiliar para inicializar os bancos após SQL Server estar pronto
+  sqlserver-init:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: sqlserver-init
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    volumes:
+      - ./scripts/init-databases.sql:/scripts/init-databases.sql:ro,z
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        echo "Aguardando SQL Server ficar pronto..."
+        sleep 5
+        echo "Criando bancos de dados..."
+        /opt/mssql-tools18/bin/sqlcmd -S sqlserver -U sa -P "YourStrong!Passw0rd" -C -i /scripts/init-databases.sql
+        echo "Bancos criados com sucesso!"
+    restart: "no"
+
+volumes:
+  sqlserver_data:
+    driver: local

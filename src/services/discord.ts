@@ -117,33 +117,39 @@ export class DiscordService {
     try {
       const { embed, attachment } = this.createDDLEmbed(change);
 
-      const messagePayload: {
-        embeds: EmbedBuilder[];
-        username?: string;
-        avatarURL?: string;
-        files?: AttachmentBuilder[];
-      } = {
-        embeds: [embed],
-      };
-
-      if (attachment) {
-        messagePayload.files = [attachment];
-      }
-
+      // Primeiro envia o embed
       if (this.webhookClient) {
         await this.webhookClient.send({
-          ...messagePayload,
+          embeds: [embed],
           username: 'SQL DDL Auditor',
           avatarURL: 'https://i.imgur.com/AfFp7pu.png'
         });
+
+        // Depois envia o arquivo SQL separadamente (se existir)
+        if (attachment) {
+          await this.webhookClient.send({
+            content: `📄 **SQL Completo** - ${change.ddlOperation} ${change.objectType} \`${change.objectName}\``,
+            files: [attachment],
+            username: 'SQL DDL Auditor',
+            avatarURL: 'https://i.imgur.com/AfFp7pu.png'
+          });
+        }
       } else if (this.client && config.discord.channelId) {
         const channel = await this.client.channels.fetch(config.discord.channelId);
         if (channel && 'send' in channel) {
-          await (channel as any).send(messagePayload);
+          await (channel as any).send({ embeds: [embed] });
+
+          // Depois envia o arquivo SQL separadamente (se existir)
+          if (attachment) {
+            await (channel as any).send({
+              content: `📄 **SQL Completo** - ${change.ddlOperation} ${change.objectType} \`${change.objectName}\``,
+              files: [attachment]
+            });
+          }
         }
       }
 
-      console.log(`Notificacao Discord enviada para ${change.ddlOperation} ${change.objectType} ${change.objectName}${attachment ? ' (com anexo SQL)' : ''}`);
+      console.log(`Notificacao Discord enviada para ${change.ddlOperation} ${change.objectType} ${change.objectName}${attachment ? ' (com anexo SQL em mensagem separada)' : ''}`);
 
     } catch (error) {
       console.error('Erro ao enviar notificacao Discord:', error);
