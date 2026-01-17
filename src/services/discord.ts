@@ -1,5 +1,11 @@
-import { Client, GatewayIntentBits, EmbedBuilder, WebhookClient } from 'discord.js';
+import { Client, GatewayIntentBits, EmbedBuilder, WebhookClient, AttachmentBuilder } from 'discord.js';
 import { config } from '../config/index.js';
+
+// Constantes para limites de tamanho
+const SQL_INLINE_LIMIT = 1000;
+const SQL_PREVIEW_LENGTH = 500;
+const MAX_ATTACHMENT_SIZE = 8 * 1024 * 1024; // 8MB - limite do Discord para bots
+const MAX_FILENAME_LENGTH = 200;
 
 export interface DDLChange {
   id: number;
@@ -109,22 +115,41 @@ export class DiscordService {
     }
 
     try {
-      const embed = this.createDDLEmbed(change);
+      const { embed, attachment } = this.createDDLEmbed(change);
 
+      // Primeiro envia o embed
       if (this.webhookClient) {
         await this.webhookClient.send({
           embeds: [embed],
           username: 'SQL DDL Auditor',
-          avatarURL: 'https://i.imgur.com/AfFp7pu.png' 
+          avatarURL: 'https://i.imgur.com/AfFp7pu.png'
         });
+
+        // Depois envia o arquivo SQL separadamente (se existir)
+        if (attachment) {
+          await this.webhookClient.send({
+            content: `📄 **SQL Completo** - ${change.ddlOperation} ${change.objectType} \`${change.objectName}\``,
+            files: [attachment],
+            username: 'SQL DDL Auditor',
+            avatarURL: 'https://i.imgur.com/AfFp7pu.png'
+          });
+        }
       } else if (this.client && config.discord.channelId) {
         const channel = await this.client.channels.fetch(config.discord.channelId);
         if (channel && 'send' in channel) {
           await (channel as any).send({ embeds: [embed] });
+
+          // Depois envia o arquivo SQL separadamente (se existir)
+          if (attachment) {
+            await (channel as any).send({
+              content: `📄 **SQL Completo** - ${change.ddlOperation} ${change.objectType} \`${change.objectName}\``,
+              files: [attachment]
+            });
+          }
         }
       }
 
-      console.log(`Notificacao Discord enviada para ${change.ddlOperation} ${change.objectType} ${change.objectName}`);
+      console.log(`Notificacao Discord enviada para ${change.ddlOperation} ${change.objectType} ${change.objectName}${attachment ? ' (com anexo SQL em mensagem separada)' : ''}`);
 
     } catch (error) {
       console.error('Erro ao enviar notificacao Discord:', error);
@@ -132,7 +157,7 @@ export class DiscordService {
   }
 
  
-  private createDDLEmbed(change: DDLChange): EmbedBuilder {
+  private createDDLEmbed(change: DDLChange): { embed: EmbedBuilder; attachment?: AttachmentBuilder } {
     const { main, operation, object } = this.getDDLEmbedConfig(change.ddlOperation, change.objectType);
 
     const embed = new EmbedBuilder()
@@ -163,21 +188,53 @@ export class DiscordService {
       }
     );
 
-    if (change.ddlStatement && change.ddlStatement.length <= 1000) {
+    let attachment: AttachmentBuilder | undefined;
+
+    if (change.ddlStatement && change.ddlStatement.length <= SQL_INLINE_LIMIT) {
       embed.addFields({
         name: 'Comando SQL',
         value: `\`\`\`sql\n${change.ddlStatement}\n\`\`\``,
         inline: false
       });
-    } else if (change.ddlStatement && change.ddlStatement.length > 1000) {
-      embed.addFields({
-        name: 'Comando SQL',
-        value: 'Comando muito longo para exibir',
-        inline: false
-      });
+    } else if (change.ddlStatement && change.ddlStatement.length > SQL_INLINE_LIMIT) {
+      const statementSize = Buffer.byteLength(change.ddlStatement, 'utf-8');
+      
+      // Cria prévia inteligente - tenta não cortar palavras
+      const previewEnd = change.ddlStatement.lastIndexOf(' ', SQL_PREVIEW_LENGTH);
+      const preview = change.ddlStatement.substring(0, previewEnd > 400 ? previewEnd : SQL_PREVIEW_LENGTH).trim();
+      
+      // Verifica se o SQL excede o limite do Discord (8MB)
+      if (statementSize > MAX_ATTACHMENT_SIZE) {
+        embed.addFields({
+          name: 'Comando SQL (prévia)',
+          value: `\`\`\`sql\n${preview}...\n\`\`\`\n⚠️ *SQL muito grande para anexar (${(statementSize / 1024 / 1024).toFixed(2)}MB > 8MB). Consulte o log do servidor.*`,
+          inline: false
+        });
+        
+        console.warn(`[AUDIT] DDL ${change.id}: SQL muito grande para Discord - ${statementSize} bytes (${(statementSize / 1024 / 1024).toFixed(2)}MB)`);
+      } else {
+        embed.addFields({
+          name: 'Comando SQL (prévia)',
+          value: `\`\`\`sql\n${preview}...\n\`\`\`\n📎 *SQL completo anexado abaixo*`,
+          inline: false
+        });
+
+        // Sanitiza tanto operação quanto nome do objeto para o filename
+        const sanitizedOperation = change.ddlOperation.replace(/[^a-zA-Z0-9_-]/g, '_');
+        const sanitizedObjectName = change.objectName.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, MAX_FILENAME_LENGTH);
+        const timestamp = Date.now();
+        const fileName = `${sanitizedOperation}_${sanitizedObjectName}_${timestamp}.sql`;
+        
+        attachment = new AttachmentBuilder(
+          Buffer.from(change.ddlStatement, 'utf-8'),
+          { name: fileName, description: `DDL: ${change.ddlOperation} ${change.objectType} ${change.objectName}` }
+        );
+        
+        console.log(`[AUDIT] DDL ${change.id}: ${fileName} (${statementSize} bytes)`);
+      }
     }
 
-    return embed;
+    return { embed, attachment };
   }
 
  
