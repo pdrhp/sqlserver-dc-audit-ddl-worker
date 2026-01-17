@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, EmbedBuilder, WebhookClient } from 'discord.js';
+import { Client, GatewayIntentBits, EmbedBuilder, WebhookClient, AttachmentBuilder } from 'discord.js';
 import { config } from '../config/index.js';
 
 export interface DDLChange {
@@ -109,22 +109,35 @@ export class DiscordService {
     }
 
     try {
-      const embed = this.createDDLEmbed(change);
+      const { embed, attachment } = this.createDDLEmbed(change);
+
+      const messagePayload: {
+        embeds: EmbedBuilder[];
+        username?: string;
+        avatarURL?: string;
+        files?: AttachmentBuilder[];
+      } = {
+        embeds: [embed],
+      };
+
+      if (attachment) {
+        messagePayload.files = [attachment];
+      }
 
       if (this.webhookClient) {
         await this.webhookClient.send({
-          embeds: [embed],
+          ...messagePayload,
           username: 'SQL DDL Auditor',
-          avatarURL: 'https://i.imgur.com/AfFp7pu.png' 
+          avatarURL: 'https://i.imgur.com/AfFp7pu.png'
         });
       } else if (this.client && config.discord.channelId) {
         const channel = await this.client.channels.fetch(config.discord.channelId);
         if (channel && 'send' in channel) {
-          await (channel as any).send({ embeds: [embed] });
+          await (channel as any).send(messagePayload);
         }
       }
 
-      console.log(`Notificacao Discord enviada para ${change.ddlOperation} ${change.objectType} ${change.objectName}`);
+      console.log(`Notificacao Discord enviada para ${change.ddlOperation} ${change.objectType} ${change.objectName}${attachment ? ' (com anexo SQL)' : ''}`);
 
     } catch (error) {
       console.error('Erro ao enviar notificacao Discord:', error);
@@ -132,7 +145,7 @@ export class DiscordService {
   }
 
  
-  private createDDLEmbed(change: DDLChange): EmbedBuilder {
+  private createDDLEmbed(change: DDLChange): { embed: EmbedBuilder; attachment?: AttachmentBuilder } {
     const { main, operation, object } = this.getDDLEmbedConfig(change.ddlOperation, change.objectType);
 
     const embed = new EmbedBuilder()
@@ -163,6 +176,8 @@ export class DiscordService {
       }
     );
 
+    let attachment: AttachmentBuilder | undefined;
+
     if (change.ddlStatement && change.ddlStatement.length <= 1000) {
       embed.addFields({
         name: 'Comando SQL',
@@ -170,14 +185,24 @@ export class DiscordService {
         inline: false
       });
     } else if (change.ddlStatement && change.ddlStatement.length > 1000) {
+      const preview = change.ddlStatement.substring(0, 500).trim();
       embed.addFields({
-        name: 'Comando SQL',
-        value: 'Comando muito longo para exibir',
+        name: 'Comando SQL (prévia)',
+        value: `\`\`\`sql\n${preview}...\n\`\`\`\n📎 *SQL completo anexado abaixo*`,
         inline: false
       });
+
+      const sanitizedObjectName = change.objectName.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const timestamp = Date.now();
+      const fileName = `${change.ddlOperation}_${sanitizedObjectName}_${timestamp}.sql`;
+      
+      attachment = new AttachmentBuilder(
+        Buffer.from(change.ddlStatement, 'utf-8'),
+        { name: fileName, description: `DDL: ${change.ddlOperation} ${change.objectType} ${change.objectName}` }
+      );
     }
 
-    return embed;
+    return { embed, attachment };
   }
 
  
